@@ -1,30 +1,10 @@
-dts-dirs += al
-dts-dirs += altera
-dts-dirs += amd
-dts-dirs += amlogic
-dts-dirs += apm
-dts-dirs += arm
-dts-dirs += broadcom
-dts-dirs += cavium
-dts-dirs += exynos
-dts-dirs += freescale
-dts-dirs += hisilicon
-dts-dirs += marvell
-dts-dirs += mediatek
-dts-dirs += nvidia
-dts-dirs += qcom
-dts-dirs += renesas
-dts-dirs += rockchip
-dts-dirs += socionext
-dts-dirs += sprd
-dts-dirs += xilinx
-dts-dirs += lg
-dts-dirs += zte
+# SPDX-License-Identifier: GPL-2.0
+dtb-y += exynos/exynos9810-crownlte_eur_open_26.dtb
 
-subdir-y	:= $(dts-dirs)
+targets += dtbs
+DTB_LIST  := $(dtb-y) $(dtbo-y)
+always    := $(DTB_LIST)
 
-dtstree		:= $(srctree)/$(src)
+dtbs: $(addprefix $(obj)/, $(DTB_LIST))
 
-dtb-$(CONFIG_OF_ALL_DTBS) := $(patsubst $(dtstree)/%.dts,%.dtb, $(foreach d,$(dts-dirs), $(wildcard $(dtstree)/$(d)/*.dts)))
-
-always		:= $(dtb-y)
+clean-files := *.dtb*

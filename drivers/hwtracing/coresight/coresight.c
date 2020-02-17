@@ -24,6 +24,8 @@
 #include <linux/of_platform.h>
 #include <linux/delay.h>
 #include <linux/pm_runtime.h>
+#include <linux/wakelock.h>
+#include <linux/cpuidle.h>
 
 #include "coresight-priv.h"
 
@@ -52,6 +54,8 @@ static DEFINE_PER_CPU(struct list_head *, tracer_path);
  * for STM.
  */
 static struct list_head *stm_path;
+static struct wake_lock cs_trace_wake_lock;
+static int cs_enable_cnt = 0;
 
 static int coresight_id_match(struct device *dev, void *data)
 {
@@ -368,6 +372,52 @@ struct coresight_device *coresight_get_sink(struct list_head *path)
 	return csdev;
 }
 
+static int coresight_enabled_sink(struct device *dev, void *data)
+{
+	bool *reset = data;
+	struct coresight_device *csdev = to_coresight_device(dev);
+
+	if ((csdev->type == CORESIGHT_DEV_TYPE_SINK ||
+	     csdev->type == CORESIGHT_DEV_TYPE_LINKSINK) &&
+	     csdev->activated) {
+		/*
+		 * Now that we have a handle on the sink for this session,
+		 * disable the sysFS "enable_sink" flag so that possible
+		 * concurrent perf session that wish to use another sink don't
+		 * trip on it.  Doing so has no ramification for the current
+		 * session.
+		 */
+		if (*reset)
+			csdev->activated = false;
+
+		return 1;
+	}
+
+	return 0;
+}
+
+/**
+ * coresight_get_enabled_sink - returns the first enabled sink found on the bus
+ * @deactivate:	Whether the 'enable_sink' flag should be reset
+ *
+ * When operated from perf the deactivate parameter should be set to 'true'.
+ * That way the "enabled_sink" flag of the sink that was selected can be reset,
+ * allowing for other concurrent perf sessions to choose a different sink.
+ *
+ * When operated from sysFS users have full control and as such the deactivate
+ * parameter should be set to 'false', hence mandating users to explicitly
+ * clear the flag.
+ */
+struct coresight_device *coresight_get_enabled_sink(bool deactivate)
+{
+	struct device *dev = NULL;
+
+	dev = bus_find_device(&coresight_bustype, NULL, &deactivate,
+			      coresight_enabled_sink);
+
+	return dev ? to_coresight_device(dev) : NULL;
+}
+
 /**
  * _coresight_build_path - recursively build a path from a @csdev to a sink.
  * @csdev:	The device to start from.
@@ -380,6 +430,7 @@ struct coresight_device *coresight_get_sink(struct list_head *path)
  * last one.
  */
 static int _coresight_build_path(struct coresight_device *csdev,
+				 struct coresight_device *sink,
 				 struct list_head *path)
 {
 	int i;
@@ -387,15 +438,15 @@ static int _coresight_build_path(struct coresight_device *csdev,
 	struct coresight_node *node;
 
 	/* An activated sink has been found.  Enqueue the element */
-	if ((csdev->type == CORESIGHT_DEV_TYPE_SINK ||
-	     csdev->type == CORESIGHT_DEV_TYPE_LINKSINK) && csdev->activated)
+	if (csdev == sink)
 		goto out;
 
 	/* Not a sink - recursively explore each port found on this element */
 	for (i = 0; i < csdev->nr_outport; i++) {
 		struct coresight_device *child_dev = csdev->conns[i].child_dev;
 
-		if (child_dev && _coresight_build_path(child_dev, path) == 0) {
+		if (child_dev &&
+		    _coresight_build_path(child_dev, sink, path) == 0) {
 			found = true;
 			break;
 		}
@@ -422,10 +473,14 @@ out:
 	return 0;
 }
 
-struct list_head *coresight_build_path(struct coresight_device *csdev)
+struct list_head *coresight_build_path(struct coresight_device *source,
+				       struct coresight_device *sink)
 {
 	struct list_head *path;
 	int rc;
+
+	if (!sink)
+		return ERR_PTR(-EINVAL);
 
 	path = kzalloc(sizeof(struct list_head), GFP_KERNEL);
 	if (!path)
@@ -433,7 +488,7 @@ struct list_head *coresight_build_path(struct coresight_device *csdev)
 
 	INIT_LIST_HEAD(path);
 
-	rc = _coresight_build_path(csdev, path);
+	rc = _coresight_build_path(source, sink, path);
 	if (rc) {
 		kfree(path);
 		return ERR_PTR(rc);
@@ -497,6 +552,7 @@ static int coresight_validate_source(struct coresight_device *csdev,
 int coresight_enable(struct coresight_device *csdev)
 {
 	int cpu, ret = 0;
+	struct coresight_device *sink;
 	struct list_head *path;
 	enum coresight_dev_subtype_source subtype;
 
@@ -519,12 +575,27 @@ int coresight_enable(struct coresight_device *csdev)
 		goto out;
 	}
 
-	path = coresight_build_path(csdev);
+	/*
+	 * Search for a valid sink for this session but don't reset the
+	 * "enable_sink" flag in sysFS.  Users get to do that explicitly.
+	 */
+	sink = coresight_get_enabled_sink(false);
+	if (!sink) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	path = coresight_build_path(csdev, sink);
 	if (IS_ERR(path)) {
 		pr_err("building path(s) failed\n");
 		ret = PTR_ERR(path);
 		goto out;
 	}
+	if (!cs_enable_cnt) {
+		wake_lock(&cs_trace_wake_lock);
+		cpuidle_pause();
+	}
+	cs_enable_cnt++;
 
 	ret = coresight_enable_path(path, CS_MODE_SYSFS);
 	if (ret)
@@ -563,6 +634,13 @@ err_source:
 
 err_path:
 	coresight_release_path(path);
+
+	cs_enable_cnt--;
+	if (!cs_enable_cnt) {
+		wake_unlock(&cs_trace_wake_lock);
+		cpuidle_resume();
+	}
+
 	goto out;
 }
 EXPORT_SYMBOL_GPL(coresight_enable);
@@ -600,6 +678,11 @@ void coresight_disable(struct coresight_device *csdev)
 	coresight_disable_path(path);
 	coresight_release_path(path);
 
+	cs_enable_cnt--;
+	if (!cs_enable_cnt) {
+		wake_unlock(&cs_trace_wake_lock);
+		cpuidle_resume();
+	}
 out:
 	mutex_unlock(&coresight_mutex);
 }
@@ -893,6 +976,8 @@ struct bus_type coresight_bustype = {
 
 static int __init coresight_init(void)
 {
+	wake_lock_init(&cs_trace_wake_lock, WAKE_LOCK_SUSPEND, "cs_hwtracing");
+
 	return bus_register(&coresight_bustype);
 }
 postcore_initcall(coresight_init);

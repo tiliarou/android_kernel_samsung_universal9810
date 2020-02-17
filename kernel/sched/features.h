@@ -51,11 +51,6 @@ SCHED_FEAT(NONTASK_CAPACITY, true)
  */
 SCHED_FEAT(TTWU_QUEUE, true)
 
-/*
- * When doing wakeups, attempt to limit superfluous scans of the LLC domain.
- */
-SCHED_FEAT(SIS_AVG_CPU, false)
-
 #ifdef HAVE_RT_PUSH_IPI
 /*
  * In order to avoid a thundering herd attack of CPUs that are
@@ -74,3 +69,25 @@ SCHED_FEAT(RT_RUNTIME_SHARE, true)
 SCHED_FEAT(LB_MIN, false)
 SCHED_FEAT(ATTACH_AGE_LOAD, true)
 
+/*
+ * Energy aware scheduling. Use platform energy model to guide scheduling
+ * decisions optimizing for energy efficiency.
+ */
+#ifdef CONFIG_DEFAULT_USE_ENERGY_AWARE
+SCHED_FEAT(ENERGY_AWARE, true)
+#else
+SCHED_FEAT(ENERGY_AWARE, false)
+#endif
+
+/*
+ * SchedTune. Use Performance/Energy filtering function to evaluate the trade
+ * off between energy consumption and performance impact when comparing
+ * previous and next candidate CPUs.
+ */
+SCHED_FEAT(ENERGY_FILTER, false)
+
+#ifdef CONFIG_SCHED_EHMP
+SCHED_FEAT(EXYNOS_HMP, true)
+#else
+SCHED_FEAT(EXYNOS_HMP, false)
+#endif

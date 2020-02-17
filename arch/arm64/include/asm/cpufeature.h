@@ -36,6 +36,9 @@ enum ftr_type {
 	FTR_HIGHER_SAFE,/* Bigger value is safe */
 };
 
+#define FTR_STRICT_WITH(config)	\
+	(IS_ENABLED(config) ? FTR_STRICT : FTR_NONSTRICT)
+
 #define FTR_STRICT	true	/* SANITY check strict matching required */
 #define FTR_NONSTRICT	false	/* SANITY check ignored */
 
@@ -219,6 +222,12 @@ static inline bool system_supports_32bit_el0(void)
 static inline bool system_supports_mixed_endian_el0(void)
 {
 	return id_aa64mmfr0_mixed_endian_el0(read_system_reg(SYS_ID_AA64MMFR0_EL1));
+}
+
+static inline bool system_uses_ttbr0_pan(void)
+{
+	return IS_ENABLED(CONFIG_ARM64_SW_TTBR0_PAN) &&
+		!cpus_have_cap(ARM64_HAS_PAN);
 }
 
 #define ARM64_SSBD_UNKNOWN		-1
