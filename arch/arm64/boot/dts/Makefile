@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: GPL-2.0
-dtb-y += exynos/exynos9810-crownlte_eur_open_26.dtb
+dts-dirs += exynos
+
+subdir-y          := $(dts-dirs)
+
+always            := $(DTB_LIST)
 
 targets += dtbs
-DTB_LIST  := $(dtb-y) $(dtbo-y)
-always    := $(DTB_LIST)
-
 dtbs: $(addprefix $(obj)/, $(DTB_LIST))
 
-clean-files := *.dtb*
+clean-files       := exynos/*.dtb *.dtb*
